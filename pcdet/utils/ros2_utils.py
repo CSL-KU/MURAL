@@ -71,7 +71,7 @@ def pose_to_tf(translation, rotation_q, stamp, frame_id, child_frame_id):
 
     return t
 
-def pred_dict_to_f32_multi_arr(pred_dict, stamp):
+def pred_dict_to_f32_multi_arr(pred_dict, stamp, frame_id='base_link'):
     pred_boxes  = pred_dict['pred_boxes'] # (N, 9) #xyz(3) dim(3) yaw(1) vel(2)
     if pred_boxes.size(0) > 0:
         pred_scores = pred_dict['pred_scores'].unsqueeze(-1) # (N, 1)
@@ -81,7 +81,7 @@ def pred_dict_to_f32_multi_arr(pred_dict, stamp):
         all_data  = torch.empty((0, 11))
 
     float_arr = Float32MultiArrayStamped()
-    float_arr.header.frame_id = 'base_link'
+    float_arr.header.frame_id = frame_id
     float_arr.header.stamp = stamp
 
     dim2 = MultiArrayDimension()
