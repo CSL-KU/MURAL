@@ -139,7 +139,7 @@ class MURAL(Detector3DTemplate):
         self.model_name = self.model_cfg.NAME + '_' + self.model_cfg.NAME_POSTFIX
 
         middle_layer = {
-                'Pillarnet': ['Backbone3D'],
+                'PillarNet': ['Backbone3D'],
                 'PointPillarsCP': ['MapToBEV'],
                 'CenterPointVN': ['Backbone3D', 'MapToBEV'],
         }

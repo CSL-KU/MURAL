@@ -128,73 +128,35 @@ class MultiVoxelCounter(torch.nn.Module):
         self.dettype = dettype
 
         # For 3D (CenterPointVN), keep all 3 dimensions; for 2D (PillarNet), use only XY
-        if dettype == 'CenterPointVN' and pillar_sizes.size(1) > 2:
-            # Keep 3D pillar sizes
-            is_3d = True
-            pillar_sizes_3d = pillar_sizes
-            pillar_sizes_2d = pillar_sizes[:, :2]  # For backward compatibility
-        else:
-            # Use 2D pillar sizes
-            is_3d = False
-            if pillar_sizes.size(1) > 2:
-                pillar_sizes = pillar_sizes[:, :2]
-            pillar_sizes_2d = pillar_sizes
-            pillar_sizes_3d = None
-
-        self.num_res = len(pillar_sizes_2d)
+        is_3d = (dettype == 'CenterPointVN')
+        self.num_res = len(pillar_sizes)
 
         # Initialize grid sizes and other parameters
-        if is_3d:
-            grid_sizes = torch.empty((self.num_res, 3), dtype=torch.int)
-            num_slices = [0] * self.num_res
-            pc_range_mins = torch.empty((self.num_res, 3))
-            for i, (ps, pc_range) in enumerate(zip(pillar_sizes_3d, pc_ranges)):
-                xyz_length = pc_range[[3,4,5]] - pc_range[[0,1,2]]
-                grid_sizes[i] = torch.round(xyz_length / ps)
-                # num_slices is computed on H dimension (index 1)
-                num_slices[i] = (grid_sizes[i, 1] // slice_sz).item()
-                pc_range_mins[i] = pc_range[[0,1,2]]
-        else:
-            grid_sizes = torch.empty((self.num_res, 2), dtype=torch.int)
-            num_slices = [0] * self.num_res
-            pc_range_mins = torch.empty((self.num_res, 2))
-            for i, (ps, pc_range) in enumerate(zip(pillar_sizes_2d, pc_ranges)):
-                xy_length = pc_range[[3,4]] - pc_range[[0,1]]
-                grid_sizes[i] = torch.round(xy_length / ps)
-                num_slices[i] = (grid_sizes[i, 0] // slice_sz).item()
-                pc_range_mins[i] = pc_range[[0,1]]
+        grid_sizes = torch.zeros((self.num_res, 3), dtype=torch.int)
+        dims = 3 if is_3d else 2
+        w_dim = 0
+        num_slices = [0] * self.num_res
+        pc_range_mins = torch.empty((self.num_res, dims))
+        for i, (ps, pc_range) in enumerate(zip(pillar_sizes[:, :dims], pc_ranges)):
+            length = pc_range[3:3+dims] - pc_range[:dims]
+            grid_sizes[i][:dims] = torch.round(length / ps)
+            num_slices[i] = (grid_sizes[i, w_dim] // slice_sz).item()
+            pc_range_mins[i] = pc_range[:dims]
 
         self.slice_sz = slice_sz
         self.grid_sizes = grid_sizes.tolist()
-        self.is_3d = is_3d
-
-        if is_3d:
-            self.pillar_sizes_cpu = pillar_sizes_3d
-            self.pillar_sizes_2d_cpu = pillar_sizes_2d
-        else:
-            self.pillar_sizes_cpu = pillar_sizes_2d
-            self.pillar_sizes_2d_cpu = pillar_sizes_2d
-
         self.pc_range_mins_cpu = pc_range_mins
-        self.pillar_sizes = pillar_sizes_2d.cuda()
+        self.pillar_sizes_cpu = pillar_sizes
+        self.pillar_sizes = pillar_sizes.cuda()
         self.pc_range_mins = pc_range_mins.cuda()
-        if is_3d:
-            self.pillar_sizes_3d = pillar_sizes_3d.cuda()
-            self.pc_range_mins_3d = pc_range_mins.cuda()
         self.num_slices = num_slices
 
+        print('is_3d', is_3d)
         print('pillar_sizes', self.pillar_sizes_cpu)
-        #print('pc_range_mins', pc_range_mins)
+        print('pc_range_mins', pc_range_mins)
         print('num_slices', num_slices)
         print('grid_sizes', self.grid_sizes)
         print('dettype', dettype)
-        print('is_3d', is_3d)
-
-        if dettype == 'PillarNet':
-            self.voxel_calc_func = PillarRes18BackBone8x_pillar_calc
-        elif dettype == 'CenterPointVN':
-            self.voxel_calc_func = VoxelResBackBone8x_voxel_calc_3d
-
 
     #@torch.jit.export
     def forward_pillar(self, points_xy : torch.Tensor, first_res_idx : int = 0) \
@@ -207,14 +169,15 @@ class MultiVoxelCounter(torch.nn.Module):
 
         expanded_pts = points_xy.unsqueeze(1).expand(-1, cur_num_res, -1)
         batch_point_coords = ((expanded_pts - self.pc_range_mins[fri:]) / \
-                self.pillar_sizes[fri:]).int()
+                self.pillar_sizes[fri:, :2]).int()
 
         inds = torch.arange(cur_num_res, device=points_xy.device).unsqueeze(0)
         inds = inds.expand(batch_point_coords.size(0), -1).flatten()
         batch_grid[:, inds, batch_point_coords[:, :, 1].flatten(),
                    batch_point_coords[:, :, 0].flatten()] = 1.0
 
-        pc0, pillar_counts = self.voxel_calc_func(batch_grid, self.num_slices[fri])
+        pc0, pillar_counts = PillarRes18BackBone8x_pillar_calc(batch_grid,
+                self.num_slices[fri])
         return pc0, pillar_counts.T
 
     #@torch.jit.export
@@ -235,8 +198,8 @@ class MultiVoxelCounter(torch.nn.Module):
                                       device=points_xyz.device, dtype=torch.float32)
 
         expanded_pts = points_xyz.unsqueeze(1).expand(-1, cur_num_res, -1)
-        batch_point_coords = ((expanded_pts - self.pc_range_mins_3d[fri:]) / \
-                self.pillar_sizes_3d[fri:]).int()
+        batch_point_coords = ((expanded_pts - self.pc_range_mins[fri:]) / \
+                self.pillar_sizes[fri:]).int()
 
         inds = torch.arange(cur_num_res, device=points_xyz.device).unsqueeze(0)
         inds = inds.expand(batch_point_coords.size(0), -1).flatten()
@@ -248,7 +211,8 @@ class MultiVoxelCounter(torch.nn.Module):
                    batch_point_coords[:, :, 1].flatten(),  # Y -> H dimension
                    batch_point_coords[:, :, 0].flatten()] = 1.0  # X -> W dimension
 
-        pc0, voxel_counts = self.voxel_calc_func(batch_grid, self.num_slices[fri])
+        pc0, voxel_counts = VoxelResBackBone8x_voxel_calc_3d(batch_grid,
+                self.num_slices[fri])  # bulk of computation happens here
         return pc0, voxel_counts.T
 
     def forward(self, points_inds : torch.Tensor, first_res_idx : int = 0) \
