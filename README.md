@@ -1,6 +1,6 @@
 # MURAL: A Multi-Resolution Anytime Framework for LiDAR Object Detection Deep Neural Networks
 
-This repository contains the implementation of MURAL, as published in RTCSA 2025.
+This repository provides the steps to use MURAL, published in RTCSA 2025. The actual code is in another repository ([here](https://github.com/CSL-KU/Anytime-Lidar/tree/master)), which will be cloned to your system once you follow the instructions here.
 
 ## 🚀 Quick Start
 
@@ -8,12 +8,12 @@ This repository contains the implementation of MURAL, as published in RTCSA 2025
 
 - Docker with NVIDIA container runtime support
 - NVIDIA GPU or iGPU (tested on Jetson Xavier, Jetson Orin, and RTX 3050)
-- nuScenes dataset
-- Pre-trained model checkpoints: [Download](https://kansas-my.sharepoint.com/:u:/g/personal/a249s197_home_ku_edu/Eb65ucMEk49Djv7jZTmXtcsBDNv3-ZPcUVF_1RQafdfhxQ?e=MGM9OK)
+- nuScenes dataset, can be downloaded from [here](https://www.nuscenes.org/nuscenes).
+- Pre-trained model checkpoints, download from [here](https://kansas-my.sharepoint.com/:u:/g/personal/a249s197_home_ku_edu/Eb65ucMEk49Djv7jZTmXtcsBDNv3-ZPcUVF_1RQafdfhxQ?e=MGM9OK).
 
 ### Training the models yourself
 
-- We did the training using a separate modified fork of the OpenPCDet repo available [here](https://github.com/ahmedius2/AL-Train). Instructions on how to train are planned to be available later.
+- We did the training using a separate fork of the OpenPCDet repo (named AL-Train) available [here](https://github.com/ahmedius2/AL-Train). Instructions on how to train are planned to be available later. However, the same instructions on the OpenPCDet repository can be followed while utilizing the config files provided in the AL-Train repository. We recommend using GPU(s) having at least 16 GB of total memory. In our case, we used a single RTX 4090.
 
 ### 1. Clone the Repository
 
@@ -91,7 +91,7 @@ To run the experiments for PillarNet and PointPillars (CenterPoint version):
 . do_run_tests.sh
 ```
 
-This script evaluates all methods presented in the paper (baselines and MURAL) across a range of deadlines. If the script fails to complete some tests, simply re-run it to complete those.
+This script evaluates all methods presented in the paper (baselines and MURAL) across a range of deadlines. If the script fails to complete some tests, simply re-run it to complete those. When completed, it will also plot all the results and save them in the same directory.
 
 ### Customizing Test Parameters
 
@@ -106,7 +106,7 @@ Where:
 - `STEP`: Increment step (in seconds)
 - `END`: Ending deadline value (in seconds)
 
-The existing values are used for an RTX 3050 (power usage was limited to 30W0.
+The existing values are used for an RTX 3050 (power usage was limited to 30W).
 
 ## 📄 Citation
 
