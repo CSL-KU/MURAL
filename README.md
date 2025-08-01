@@ -1,6 +1,6 @@
 # MURAL: A Multi-Resolution Anytime Framework for LiDAR Object Detection Deep Neural Networks
 
-This repository provides the steps to use MURAL, published in RTCSA 2025. The actual code is in another repository ([here](https://github.com/CSL-KU/Anytime-Lidar/tree/master)), which will be cloned to your system once you follow the instructions here.
+This is the code repository of MURAL, published in RTCSA 2025.
 
 ## 🚀 Quick Start
 
@@ -18,8 +18,8 @@ This repository provides the steps to use MURAL, published in RTCSA 2025. The ac
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/CSL-KU/Anytime-Lidar.git
-cd Anytime-Lidar/docker
+git clone https://github.com/CSL-KU/MURAL.git
+cd MURAL/docker
 ```
 
 ### 2. Build Docker Image
@@ -48,7 +48,7 @@ Execute the following command (example for x86 systems):
 docker run --gpus all --net host -it --ipc=host --privileged \
     --cap-add=ALL --ulimit rtprio=99 --tmpfs /tmpfs \
     -v $NUSCENES_PATH:/root/nuscenes \
-    -v $MODELS_PATH:/root/Anytime-Lidar/models \
+    -v $MODELS_PATH:/root/MURAL/models \
     --name mural kucsl/mural:x86_nv23.10
 ```
 
@@ -69,7 +69,7 @@ nuscenes/
 Once inside the container (this happens automatically due to the `-it` flag), run:
 
 ```bash
-cd ~/Anytime-Lidar/tools
+cd ~/MURAL/tools
 . initialize.sh
 ```
 
@@ -106,15 +106,17 @@ Where:
 - `STEP`: Increment step (in seconds)
 - `END`: Ending deadline value (in seconds)
 
-The existing values are used for an RTX 3050 (power usage was limited to 30W).
+The existing deadline ranges in the do_run_tests.sh script are used for an RTX 3050 (power usage was limited to 30W).
 
 ## 📄 Citation
 
 ```bibtex
-@inproceedings{mural2025,
-    title={MURAL: A Multi-Resolution Anytime Framework for LiDAR Object Detection Deep Neural Networks},
-    booktitle={IEEE International Conference on Embedded and Real-Time Computing Systems and Applications (RTCSA)},
-    year={2025}
+@INPROCEEDINGS{mural2025,
+  author={Soyyigit, Ahmet and Yao, Shuochao and Yun, Heechul},
+  booktitle={IEEE International Conference on Embedded and Real-Time Computing Systems and Applications (RTCSA)}, 
+  title={MURAL: A Multi-Resolution Anytime Framework for LiDAR Object Detection Deep Neural Networks},
+  address={Singapore},
+  year={2026}
 }
 ```
 

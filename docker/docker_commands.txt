@@ -1,0 +1,4 @@
+# Use the one suitable for your platform
+
+docker buildx build . --build-arg CUDA_ARCH="8.6" -f Dockerfile.x86 -t kucsl/mural:x86_nv23.10
+docker buildx build . --build-arg CUDA_ARCH="8.7" -t kucsl/mural:jetson-orin
