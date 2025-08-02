@@ -5,7 +5,7 @@ set(TRT_INCLUDES "${TRT_ROOT}/include;${TRT_ROOT}/samples/common;${TRT_ROOT}/sam
 
 # Set TRT_LIBS based on architecture
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-    set(TRT_LIBS "/usr/lib/aarch64-linux-gnu/")
+    set(TRT_LIBS "/root/TensorRT/lib")
     message(STATUS "Detected ARM64 architecture, using: ${TRT_LIBS}")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
     set(TRT_LIBS "/usr/lib/x86_64-linux-gnu/")
