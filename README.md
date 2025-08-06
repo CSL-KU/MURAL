@@ -6,6 +6,7 @@ This is the code repository of MURAL, published in RTCSA 2025.
 
 ### Prerequisites
 
+- Ubuntu Linux
 - Docker with NVIDIA container runtime support
 - NVIDIA GPU or iGPU (tested on Jetson Xavier, Jetson Orin, and RTX 3050)
 - nuScenes dataset, can be downloaded from [here](https://www.nuscenes.org/nuscenes).
@@ -42,17 +43,7 @@ docker buildx build . --build-arg CUDA_ARCH="8.7" -t kucsl/mural:jetson-orin
 
 ### 3. Run Docker Container
 
-Execute the following command (example for x86 systems):
-
-```bash
-docker run --gpus all --net host -it --ipc=host --privileged \
-    --cap-add=ALL --ulimit rtprio=99 --tmpfs /tmpfs \
-    -v $NUSCENES_PATH:/root/nuscenes \
-    -v $MODELS_PATH:/root/MURAL/models \
-    --name mural kucsl/mural:x86_nv23.10
-```
-
-**Environment Variables:**
+**Define the Following Environment Variables:**
 - `NUSCENES_PATH`: Path to your nuScenes dataset. The hierarchy of the dataset folder should be as follows:
 ```
 nuscenes/
@@ -63,6 +54,24 @@ nuscenes/
     └── v1.0-trainval/
 ```
 - `MODELS_PATH`: Path to the downloaded model checkpoint files.
+
+Once they are defined, run the following command for x86 systems:
+```bash
+docker run --gpus all --net host -it --ipc=host --privileged \
+    --cap-add=ALL --ulimit rtprio=99 --tmpfs /tmpfs \
+    -v $NUSCENES_PATH:/root/nuscenes \
+    -v $MODELS_PATH:/root/MURAL/models \
+    --name mural kucsl/mural:x86_nv23.10
+```
+for NVIDIA Jetson systems, run the following instead:
+```bash
+docker run --runtime nvidia --net host -it --privileged --cap-add=ALL \
+    --ulimit rtprio=99 --tmpfs /tmpfs \
+    -v $NUSCENES_PATH:/root/nuscenes \
+    -v $MODELS_PATH:/root/MURAL/models \
+    -v /var/lib/nvpmodel/status:/var/lib/nvpmodel/status \
+    --name mural kucsl/mural:jetson-orin
+```
 
 ### 5. Initialize the Environment
 
@@ -91,11 +100,11 @@ To run the experiments for PillarNet and PointPillars (CenterPoint version):
 . do_run_tests.sh
 ```
 
-This script evaluates all methods presented in the paper (baselines and MURAL) across a range of deadlines. If the script fails to complete some tests, simply re-run it to complete those. When completed, it will also plot all the results and save them in the same directory.
+This script evaluates all methods presented in the paper (baselines and MURAL) across a range of deadlines. If the script fails to complete some tests, simply re-run it to complete those. When completed, it will also plot all the results and save them in the folders named exp_plots_Pillarnet and exp_plots_PointpillarsCP.
 
 ### Customizing Test Parameters
 
-You can modify the deadline ranges by editing the `do_run_tests.sh` script. Look for commands like:
+You can modify the deadline ranges by editing the `do_run_tests.sh` script. Look for following command:
 
 ```bash
 ./run_tests.sh methods BEGIN STEP END
