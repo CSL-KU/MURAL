@@ -10,7 +10,7 @@ export IGNORE_DL_MISS=${IGNORE_DL_MISS:-0}
 export DO_EVAL=${DO_EVAL:-1}
 export CALIBRATION=${CALIBRATION:-0}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
-export TASKSET=${TASKSET:-"taskset -c 2-7"}
+#export TASKSET=${TASKSET:-"taskset -c 2-7"}
 export USE_AMP=${USE_AMP:-"false"}
 export PMODE=${PMODE:-"UNKNOWN_POWER_MODE"}
 
@@ -148,7 +148,7 @@ elif [ $1 == 'methods' ] || [ $1 == 'methods_dyn' ]; then
     CFG_FILE=${CFG_FILES[$m]}
     CKPT_FILE=${CKPT_FILES[$m]}
 
-    TSKST="taskset -c 2-7"
+    #TSKST="taskset -c 2-7"
     MTD=$m
 
     if [ $CFG_FILE == "dummy" ]; then
@@ -157,7 +157,7 @@ elif [ $1 == 'methods' ] || [ $1 == 'methods_dyn' ]; then
 
     export OMP_NUM_THREADS=4
     export USE_ALV1=0
-    CMD="chrt -r 90 $TSKST python test.py --cfg_file=$CFG_FILE \
+    CMD="chrt -r 90 python test.py --cfg_file=$CFG_FILE \
         --ckpt $CKPT_FILE --batch_size=1 --workers 0 $AMP"
 
     if [ $1 == 'methods' ]; then

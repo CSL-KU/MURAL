@@ -14,7 +14,7 @@ def create_trt_engine(onnx_path, outp_engine_path, inp_name, min_shape=None, opt
     plugin_path = "../pcdet/trt_plugins/slice_and_batch_nhwc/build/libslice_and_batch_lib.so"
 
     command = [
-        f"trtexec",
+        "chrt", "-o", "0", "trtexec",
         f"--onnx={onnx_path}",
         f"--saveEngine={outp_engine_path}",
         f"--staticPlugins={plugin_path}"
