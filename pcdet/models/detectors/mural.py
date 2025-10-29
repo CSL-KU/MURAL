@@ -46,12 +46,15 @@ class MURAL(Detector3DTemplate):
         self.method = int(self.model_cfg.METHOD)
         self.method_str = MURAL.method_num_to_str_list(self.method)
         self.dettype = self.model_cfg.DETECTOR_TYPE
-        assert self.dettype == 'PillarNet' or self.dettype == 'PointPillarsCP'
+        assert self.dettype == 'PillarNet' or \
+                self.dettype == 'PointPillarsCP' or \
+                self.dettype == 'CenterPointVN'
 
         rd = model_cfg.get('RESOLUTION_DIV', [1.0])
         pc_range = self.dataset.point_cloud_range
         self.max_grid_l = self.dataset.grid_size[0]
-        grid_slice_sz = 32 if self.dettype == 'PillarNet' else 8
+        grid_slice_sz = {'PillarNet' : 32, 'CenterPointVN': 32, 'PointPillarsCP': 8}
+        grid_slice_sz = grid_slice_sz[self.dettype]
         if "RI" in self.method_str:
             pc_range_l = pc_range.tolist()
             all_pc_ranges, all_pillar_sizes, all_grid_lens, new_resdivs, resdiv_mask = \
@@ -82,13 +85,18 @@ class MURAL(Detector3DTemplate):
             all_pillar_sizes = t.repeat_interleave(2).reshape(-1, 2)
             all_pc_ranges = [pc_range.tolist()] * len(rd)
             resdiv_mask = [True] * len(rd)
+            if self.dettype == 'CenterPointVN':
+                zt = torch.full((len(all_pillar_sizes), 1), self.dataset.voxel_size[2],
+                       dtype=all_pillar_sizes.dtype)
+                all_pillar_sizes = torch.cat((all_pillar_sizes, zt), dim=1)
+
 
         self._eval_dict['resolution_selections'] = [0] * len(rd)
 
         self.model_cfg.VFE.RESOLUTION_DIV = rd
         self.model_cfg.VFE.RESDIV_MASK = resdiv_mask
         self.model_cfg.VFE.ALL_PC_RANGES = all_pc_ranges
-        if self.dettype == 'PillarNet':
+        if self.dettype == 'PillarNet' or self.dettype == 'CenterPointVN':
             self.model_cfg.BACKBONE_3D.RESOLUTION_DIV = rd
             self.model_cfg.BACKBONE_3D.RESDIV_MASK = resdiv_mask
         elif self.dettype == 'PointPillarsCP':
@@ -130,10 +138,17 @@ class MURAL(Detector3DTemplate):
 
         self.model_name = self.model_cfg.NAME + '_' + self.model_cfg.NAME_POSTFIX
 
+        middle_layer = {
+                'Pillarnet': ['Backbone3D'],
+                'PointPillarsCP': ['MapToBEV'],
+                'CenterPointVN': ['Backbone3D', 'MapToBEV'],
+        }
         self.update_time_dict({
             'Sched' : [],
             'VFE' : [],
-            ('Backbone3D' if self.dettype == 'PillarNet' else 'MapToBEV'): [],
+        })
+        self.update_time_dict({l : [] for l in middle_layer[self.dettype]})
+        self.update_time_dict({
             'DenseOps':[],
             'CenterHead-GenBox': [],
         })
@@ -145,6 +160,8 @@ class MURAL(Detector3DTemplate):
             self.vfe, self.map_to_bev, self.backbone_2d, self.dense_head = self.module_list
             self.map_to_bev_scrpt = torch.jit.script(self.map_to_bev)
             self.backbone_3d = None
+        if self.dettype == 'CenterPointVN':
+            self.vfe, self.backbone_3d, self.map_to_bev, self.backbone_2d, self.dense_head = self.module_list
         print('Model size is:', self.get_model_size_MB(), 'MB')
 
         self.num_res = len(self.resolution_dividers)
@@ -171,13 +188,14 @@ class MURAL(Detector3DTemplate):
         print(self.filter_pc_range)
         self.calib_pc_range = self.filter_pc_range.clone()
 
-        mpc = MultiPillarCounter(all_pillar_sizes, torch.tensor(all_pc_ranges), grid_slice_sz)
+        mpc = MultiVoxelCounter(all_pillar_sizes, torch.tensor(all_pc_ranges),
+                grid_slice_sz, self.dettype)
         mpc.eval()
         self.mpc_script = torch.jit.script(mpc)
 
         self.dense_head_scrpt = None
         self.inp_tensor_sizes = [np.ones(4, dtype=int)] * self.num_res
-        self.dense_inp_slice_sz = 4 if self.dettype == 'PillarNet' else 8
+        self.dense_inp_slice_sz = 8 if self.dettype == 'PointPillarsCP' else 4
         self.calibrators = [MURALCalibrator(self, ri, self.mpc_script.num_slices[ri]) \
                 for ri in range(self.num_res)]
 
@@ -267,8 +285,13 @@ class MURAL(Detector3DTemplate):
                         first_res_idx = 0
                     if first_res_idx < self.num_res - 1:
                         if self.backbone_3d is not None:
-                            points_xy = points[:, 1:3]
-                            pc0, all_pillar_counts = self.mpc_script(points_xy, first_res_idx)
+                            if self.dettype == 'CenterPointVN':
+                                points_xyz = points[:, 1:4]
+                                pc0, all_pillar_counts = self.mpc_script(points_xyz, first_res_idx)
+                            else:
+                                points_xy = points[:, 1:3]
+                                pc0, all_pillar_counts = self.mpc_script(points_xy, first_res_idx)
+
                             if self.dense_conv_opt_on:
                                 x_minmax_tmp = torch.from_numpy(get_xminmax_from_pc0(pc0.cpu().numpy()))
                                 self.x_minmax[first_res_idx:] = x_minmax_tmp
@@ -377,8 +400,10 @@ class MURAL(Detector3DTemplate):
             points = batch_dict['points']
             batch_dict['pillar_coords'], batch_dict['pillar_features'] = \
                     self.traced_vfe[self.res_idx](points)
+            batch_dict['voxel_coords'] = batch_dict['pillar_coords']
+            batch_dict['voxel_features'] = batch_dict['pillar_features']
 
-            if self.map_to_bev is not None:
+            if self.dettype == 'PointPillarsCP':
                 self.measure_time_start('MapToBEV')
                 self.map_to_bev_scrpt.adjust_grid_size_wrt_resolution(self.res_idx)
                 conv_inp = self.map_to_bev_scrpt(batch_dict['pillar_features'],
@@ -392,9 +417,18 @@ class MURAL(Detector3DTemplate):
                 if self.is_calibrating():
                     batch_dict['record_time'] = True # returns bb3d_layer_time_events
                 batch_dict['record_int_vcounts'] = True # returns bb3d_num_voxels, no overhead
-                batch_dict = self.backbone_3d.forward_up_to_dense(batch_dict)
-                conv_inp = batch_dict['x_conv4_out']
+                if self.dettype == 'PillarNet':
+                    batch_dict = self.backbone_3d.forward_up_to_dense(batch_dict)
+                    conv_inp = batch_dict['x_conv4_out']
+                elif self.dettype == 'CenterPointVN':
+                    batch_dict = self.backbone_3d(batch_dict)
                 self.measure_time_end('Backbone3D')
+
+            if self.dettype == 'CenterPointVN':
+                self.measure_time_start('MapToBEV')
+                batch_dict = self.map_to_bev(batch_dict)
+                conv_inp = batch_dict['spatial_features']
+                self.measure_time_end('MapToBEV')
 
             if not self.optimization_done[self.res_idx]:
                 self.optimize(conv_inp)

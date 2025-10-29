@@ -29,14 +29,20 @@ if [ -z $CFG_FILE ] && [ -z $CKPT_FILE ]; then
     #CFG_FILE="./cfgs/nuscenes_models/valo_pillarnet_0100.yaml"
     #CKPT_FILE="../models/pillarnet0100_e20.pth"
 
-    CFG_FILE="./cfgs/nuscenes_models/valo_pointpillars_cp_0200.yaml"
-    CKPT_FILE="../models/PointPillarsCP0200_e20.pth"
+    #CFG_FILE="./cfgs/nuscenes_models/valo_pointpillars_cp_0200.yaml"
+    #CKPT_FILE="../models/PointPillarsCP0200_e20.pth"
 
     #CFG_FILE="./cfgs/nuscenes_models/pillarnet0100.yaml"
-    #CKPT_FILE="../models/pillarnet0100_e20.pth"
+    #CKPT_FILE="../models/cbgs_pillar01_res2d_centerpoint_nds_6585.pth"
 
     #CFG_FILE="./cfgs/nuscenes_models/PointPillarsCP0200.yaml"
     #CKPT_FILE="../models/PointPillarsCP0200_e20.pth"
+
+    #CFG_FILE="./cfgs/nuscenes_models/CenterPointVN0100.yaml"
+    #CKPT_FILE="../models/centerpoint_voxel_0100_e30.pth"
+
+    CFG_FILE="./cfgs/nuscenes_models/mural_centerpoint_voxel_0100_0128_0200.yaml"
+    CKPT_FILE="../models/mural_centerpoint_voxel_0100_0128_0200_e30.pth"
 fi
 
 #CMD="$PROF_CMD $TASKSET python test.py --cfg_file=$CFG_FILE \
