@@ -271,7 +271,9 @@ def pc_range_filter(points, point_cloud_range):
     mask3 = points[:, 1] < point_cloud_range[3] # +x
     mask2 = points[:, 2] > point_cloud_range[1] # -y
     mask4 = points[:, 2] < point_cloud_range[4] # +y
-    return points[mask1 & mask2 & mask3 & mask4]
+    mask5 = points[:, 3] > point_cloud_range[2] # -z
+    mask6 = points[:, 3] < point_cloud_range[5] # +z
+    return points[mask1 & mask2 & mask3 & mask4 & mask5 & mask6]
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

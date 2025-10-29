@@ -36,12 +36,12 @@ class CenterPointOpt(Detector3DTemplate):
 
         self.update_time_dict( {
             'VFE' : [],
-            'MapToBEV' : [],
         })
         self.use_pillars = (self.model_cfg.get('BACKBONE_3D', None) is None)
         if not self.use_pillars:
             self.update_time_dict({'Backbone3D': []})
         self.update_time_dict( {
+            'MapToBEV' : [],
             'DenseConvsPipeline':[],
             'CenterHead-Topk': [],
             'CenterHead-GenBox': [],

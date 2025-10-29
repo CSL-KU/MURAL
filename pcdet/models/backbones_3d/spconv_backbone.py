@@ -2,9 +2,10 @@ from functools import partial
 
 import torch.nn as nn
 import torch
+from typing import Tuple
 
 from ...utils.spconv_utils import replace_feature, spconv
-
+from pcdet.ops.norm_funcs.res_aware_bnorm import ResAwareBatchNorm1d
 
 def post_act_block(in_channels, out_channels, kernel_size, indice_key=None, stride=1, padding=0,
                    conv_type='subm', norm_fn=None):
@@ -180,12 +181,61 @@ class VoxelBackBone8x(nn.Module):
 
         return batch_dict
 
+#static method
+def VoxelResBackBone8x_voxel_calc_3d(bev_img_3d : torch.Tensor, num_slices : int) \
+        -> Tuple[torch.Tensor,torch.Tensor]:
+    """
+    3D version that handles inputs in NCDHW format.
+    Max pooling parameters match the VoxelResBackBone8x architecture:
+    - conv2: stride=2, padding=1
+    - conv3: stride=2, padding=1
+    - conv4: stride=2, padding=(0, 1, 1) - asymmetric padding on depth dimension
+
+    Args:
+        bev_img_3d: Input tensor of shape (N, C, D, H, W)
+        num_slices: Number of slices used to partition the depth (D) dimension
+
+    Returns:
+        p0_: Tensor of shape (num_res, num_slices)
+        stacked: Tensor of shape (4, num_res) containing counts at different stages
+    """
+    bi_sz = bev_img_3d.shape  # N, C, D, H, W
+    p0_ = bev_img_3d.view(
+        bi_sz[0], bi_sz[1], bi_sz[2] , bi_sz[3], num_slices, bi_sz[4] // num_slices
+    ).sum(dim=[0, 2, 3, 5])
+
+    # Apply 3D max pooling matching the architecture's conv parameters
+    # conv2: kernel_size=3, stride=2, padding=1 (all dimensions)
+    x1 = torch.nn.functional.max_pool3d(bev_img_3d, kernel_size=3, stride=2, padding=1)
+
+    # conv3: kernel_size=3, stride=2, padding=1 (all dimensions)
+    x2 = torch.nn.functional.max_pool3d(x1, kernel_size=3, stride=2, padding=1)
+
+    # conv4: kernel_size=3, stride=2, padding=(0, 1, 1) - no padding on depth (D), padding=1 on H and W
+    # Note: max_pool3d expects padding as (padD, padH, padW)
+    x3 = torch.nn.functional.max_pool3d(x2, kernel_size=3, stride=2, padding=(0, 1, 1))
+
+    dims = [0, 2, 3, 4]  # sum over N, D, H, W, num_slices  -> leave channels
+    p1 = x1.sum(dim=dims)
+    p2 = x2.sum(dim=dims)
+    p3 = x3.sum(dim=dims)
+    p0 = p0_.sum(dim=1) # remember p0_ is (num_res, num_slices)
+    return p0_, torch.stack((p0, p1, p2, p3))  # (num_res, num_slices), (num_layer, num_res)
+
 
 class VoxelResBackBone8x(nn.Module):
     def __init__(self, model_cfg, input_channels, grid_size, **kwargs):
         super().__init__()
         self.model_cfg = model_cfg
-        norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
+
+        self.res_divs = model_cfg.get('RESOLUTION_DIV', [1.0])
+        self.resdiv_mask = self.model_cfg.get('RESDIV_MASK', [True] * len(self.res_divs))
+        norm_method = self.model_cfg.get('NORM_METHOD', 'Batch')
+        if norm_method == 'ResAwareBatch':
+            norm_fn = partial(ResAwareBatchNorm1d, res_divs=self.res_divs, \
+                    resdiv_mask=self.resdiv_mask, eps=1e-3, momentum=0.01)
+        else:
+            norm_fn = partial(nn.BatchNorm1d, eps=1e-3, momentum=0.01)
 
         self.sparse_shape = grid_size[::-1] + [1, 0, 0]
 
@@ -247,6 +297,8 @@ class VoxelResBackBone8x(nn.Module):
         # numbers here are determined with respect to strides
         return [tile_size_voxels / float(s) for s in (2,4,8)]
 
+    def sparse_outp_downscale_factor(self):
+        return 8 # 3 convs with stride of 2
 
     def forward(self, batch_dict):
         """
@@ -280,10 +332,12 @@ class VoxelResBackBone8x(nn.Module):
         if record_int_indices:
             vinds = []
 
+        resdiv = batch_dict.get('resolution_divider', 1)
+        sparse_shape = [self.sparse_shape[0]] + [int(s/resdiv) for s in self.sparse_shape[1:]]
         input_sp_tensor = spconv.SparseConvTensor(
             features=voxel_features,
             indices=voxel_coords.int(),
-            spatial_shape=self.sparse_shape,
+            spatial_shape=sparse_shape,
             batch_size=batch_size
         )
         x = self.conv_input(input_sp_tensor)
