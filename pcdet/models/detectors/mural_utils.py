@@ -146,8 +146,8 @@ class MultiVoxelCounter(torch.nn.Module):
         self.slice_sz = slice_sz
         self.grid_sizes = grid_sizes.tolist()
         self.pc_range_mins_cpu = pc_range_mins
-        self.pillar_sizes_cpu = pillar_sizes
-        self.pillar_sizes = pillar_sizes.cuda()
+        self.pillar_sizes_cpu = pillar_sizes[:, :dims]
+        self.pillar_sizes = self.pillar_sizes_cpu.cuda()
         self.pc_range_mins = pc_range_mins.cuda()
         self.num_slices = num_slices
 
@@ -169,7 +169,7 @@ class MultiVoxelCounter(torch.nn.Module):
 
         expanded_pts = points_xy.unsqueeze(1).expand(-1, cur_num_res, -1)
         batch_point_coords = ((expanded_pts - self.pc_range_mins[fri:]) / \
-                self.pillar_sizes[fri:, :2]).int()
+                self.pillar_sizes[fri:]).int()
 
         inds = torch.arange(cur_num_res, device=points_xy.device).unsqueeze(0)
         inds = inds.expand(batch_point_coords.size(0), -1).flatten()
