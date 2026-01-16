@@ -229,7 +229,7 @@ class MultiVoxelCounter(torch.nn.Module):
         minmax = torch.cat((xmin.unsqueeze(-1), xmax.unsqueeze(-1))).cpu()
         for i in range(self.num_res):
             minmax_s = minmax - self.pc_range_mins_cpu[i, 0]
-            minmax_s = (minmax_s / self.pillar_sizes_cpu[i]).int()
+            minmax_s = (minmax_s / self.pillar_sizes_cpu[i, :2]).int()
             x_minmax[i] = minmax_s // self.slice_sz
         return x_minmax
 
