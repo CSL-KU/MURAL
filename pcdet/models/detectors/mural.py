@@ -14,6 +14,7 @@ from typing import Dict, List, Tuple, Optional, Final
 from .forecaster import split_dets, Forecaster
 from .mural_utils import *
 from ...utils import common_utils, vsize_calc
+from bisect import bisect_left
 
 import ctypes
 pth = os.environ['PCDET_PATH']
@@ -37,6 +38,11 @@ class MURAL(Detector3DTemplate):
             return ("WS", "RI", "DCO", "FRC")
         elif method_num == 12:
             return ("DS", "DCO")
+        #13 is valo
+        elif method_num == 14:
+            return ("WS", "DCO", "FRC")
+        elif method_num == 15:
+            return ("DS", "RE", "DCO", "FRC")
         else:
             return tuple()
 
@@ -60,23 +66,6 @@ class MURAL(Detector3DTemplate):
             all_pc_ranges, all_pillar_sizes, all_grid_lens, new_resdivs, resdiv_mask = \
                     vsize_calc.interpolate_pillar_sizes(self.max_grid_l, rd, pc_range_l,
                     step=grid_slice_sz)
-            #Additional resolution lower than lowest trained resolution
-            area_l_mm = int((pc_range_l[3] - pc_range_l[0]) * 1000000)
-            area_min_l_mm = area_l_mm - 1500000
-            area_max_l_mm = area_l_mm + 1500000
-            min_grid_len = all_grid_lens[-1]
-            if model_cfg.get('EXTRAPOLATE_RES', True):
-                diffs = (32, 64, 96) if self.dettype == 'PointPillarsCP' else (128,)
-                for diff in diffs:
-                    opt = vsize_calc.calc_area_and_pillar_sz(min_grid_len-diff, area_min_l_mm,
-                                                             area_max_l_mm)
-                    new_pc_range, new_psize, new_grid_l = vsize_calc.option_to_params(opt,
-                                                                                      pc_range_l,
-                                                                                      pillar_h=0.2)
-                    all_pc_ranges.append(new_pc_range)
-                    all_pillar_sizes.append(new_psize)
-                    all_grid_lens.append(new_grid_l)
-                    resdiv_mask.append(False)
             new_resdivs = [all_grid_lens[0]/gl for gl in all_grid_lens]
             rd = new_resdivs
             all_pillar_sizes = torch.tensor(all_pillar_sizes)
@@ -84,12 +73,35 @@ class MURAL(Detector3DTemplate):
             t = torch.tensor(rd) * self.dataset.voxel_size[0]
             all_pillar_sizes = t.repeat_interleave(2).reshape(-1, 2)
             all_pc_ranges = [pc_range.tolist()] * len(rd)
+            all_grid_lens = [self.max_grid_l / r for r in rd]
             resdiv_mask = [True] * len(rd)
             if self.dettype == 'CenterPointVN':
                 zt = torch.full((len(all_pillar_sizes), 1), self.dataset.voxel_size[2],
                        dtype=all_pillar_sizes.dtype)
                 all_pillar_sizes = torch.cat((all_pillar_sizes, zt), dim=1)
 
+        # method_str here has priority over model_cfg settings
+        if "RE" in self.method_str or model_cfg.get('EXTRAPOLATE_RES', True):
+            pc_range_l = pc_range.tolist()
+            area_l_mm = int((pc_range_l[3] - pc_range_l[0]) * 1000000)
+            area_min_l_mm = area_l_mm - 1500000
+            area_max_l_mm = area_l_mm + 1500000
+            min_grid_len = all_grid_lens[-1]
+            all_pillar_sizes = all_pillar_sizes.tolist()
+            diffs = (32, 64, 96) if self.dettype == 'PointPillarsCP' else (128,)
+            for diff in diffs:
+                opt = vsize_calc.calc_area_and_pillar_sz(min_grid_len-diff, area_min_l_mm,
+                                                         area_max_l_mm)
+                new_pc_range, new_psize, new_grid_l = vsize_calc.option_to_params(opt,
+                                                                                  pc_range_l,
+                                                                                  pillar_h=0.2)
+                all_pc_ranges.append(new_pc_range)
+                all_pillar_sizes.append(new_psize)
+                all_grid_lens.append(new_grid_l)
+                resdiv_mask.append(False)
+            new_resdivs = [all_grid_lens[0]/gl for gl in all_grid_lens]
+            rd = new_resdivs
+            all_pillar_sizes = torch.tensor(all_pillar_sizes) if not isinstance(all_pillar_sizes, torch.Tensor) else all_pillar_sizes
 
         self._eval_dict['resolution_selections'] = [0] * len(rd)
 
@@ -112,6 +124,7 @@ class MURAL(Detector3DTemplate):
         self.all_pc_ranges = torch.tensor(all_pc_ranges)
 
         self.interpolate_batch_norms = ("RI" in self.method_str)
+        self.extrapolate_batch_norms = ("RE" in self.method_str or model_cfg.get('EXTRAPOLATE_RES', True))
         self.dense_conv_opt_on = ("DCO" in self.method_str)
         self.enable_forecasting_to_fut = ("FRC" in self.method_str) and self.ignore_dl_miss
         self.enable_forecasting = ("FRC" in self.method_str) and not self.ignore_dl_miss
@@ -198,6 +211,7 @@ class MURAL(Detector3DTemplate):
         self.dense_inp_slice_sz = 8 if self.dettype == 'PointPillarsCP' else 4
         self.calibrators = [MURALCalibrator(self, ri, self.mpc_script.num_slices[ri]) \
                 for ri in range(self.num_res)]
+        self.bb3d_timing_data_sorted = [np.ones((1, self.num_res))] * self.num_res
 
         self.use_oracle_res_predictor = False
         self.res_predictor = None
@@ -213,7 +227,7 @@ class MURAL(Detector3DTemplate):
             except:
                 pass
         self.sched_time_point_ms = 0
-        self.batch_norm_interpolated = False
+        self.batch_norm_iepolated = False
         self.x_minmax = torch.empty((self.num_res, 2), dtype=torch.int)
         self.e2e_min_times_ms = None
 
@@ -232,10 +246,10 @@ class MURAL(Detector3DTemplate):
             return self.forward_eval(batch_dict)
 
     def forward_eval(self, batch_dict):
-        if self.interpolate_batch_norms and not self.batch_norm_interpolated:
+        if (self.interpolate_batch_norms or self.extrapolate_batch_norms) and not self.batch_norm_iepolated:
             interpolate_batch_norms(self.res_aware_1d_batch_norms, self.max_grid_l)
             interpolate_batch_norms(self.res_aware_2d_batch_norms, self.max_grid_l) #, True)
-            self.batch_norm_interpolated = True
+            self.batch_norm_iepolated = True
             print('Model size is:', self.get_model_size_MB(), 'MB')
 
         scene_reset = batch_dict['scene_reset']
@@ -273,7 +287,7 @@ class MURAL(Detector3DTemplate):
                             pred_res_idx = i
                             conf_found = True
                             break
-                else:
+                else: # dynamic scheduling (DS)
                     if self.e2e_min_times_ms is not None:
                         keepmask = (self.e2e_min_times_ms <= (batch_dict['deadline_sec']*1000))
                         first_res_idx = torch.where(keepmask)[0]
@@ -286,17 +300,41 @@ class MURAL(Detector3DTemplate):
                     if first_res_idx < self.num_res - 1:
                         if self.backbone_3d is not None:
                             if self.dettype == 'CenterPointVN':
-                                points_xyz = points[:, 1:4]
-                                pc0, all_pillar_counts = self.mpc_script(points_xyz, first_res_idx)
+                                pc0, all_pillar_counts = None, None
+                                # old method, cumbersome for voxel
+                                # points_xyz = points[:, 1:4]
+                                # pc0, all_pillar_counts = self.mpc_script(points_xyz, first_res_idx)
+
+                                # new method
+                                # utilize the last resolution used and execution time of 3d backbone
+                                # self.res_idx is the last used res idx
+                                if not self.is_calibrating() and self._time_dict['Backbone3D']:
+                                    last_bb3d_t = self._time_dict['Backbone3D'][-1] # last recorded time
+                                    tdata = self.bb3d_timing_data_sorted[self.res_idx]
+                                    tdata_last_res = tdata[:, self.res_idx]
+                                    #find the entry which is closest to last_bb3d_t, note that tdata_last_res is sorted
+                                    pos = bisect_left(tdata_last_res, last_bb3d_t)
+                                    if pos == 0:
+                                        closest_idx = 0
+                                    elif pos == len(tdata_last_res):
+                                        closest_idx = len(tdata_last_res) - 1
+                                    else:
+                                        closest_idx = pos - 1 if abs(tdata_last_res[pos-1] - last_bb3d_t) \
+                                                < abs(tdata_last_res[pos] - last_bb3d_t) else pos
+
+                                    bb3d_timings_per_res = tdata[closest_idx, :]
+                                else:
+                                    bb3d_timings_per_res = self.bb3d_timing_data_sorted[0][-1, :]
                             else:
                                 points_xy = points[:, 1:3]
                                 pc0, all_pillar_counts = self.mpc_script(points_xy, first_res_idx)
 
-                            if self.dense_conv_opt_on:
-                                x_minmax_tmp = torch.from_numpy(get_xminmax_from_pc0(pc0.cpu().numpy()))
-                                self.x_minmax[first_res_idx:] = x_minmax_tmp
-                                x_minmax_calculated = True
-                            all_pillar_counts = all_pillar_counts.cpu()
+                            if self.dettype != 'CenterPointVN':
+                                if self.dense_conv_opt_on:
+                                    x_minmax_tmp = torch.from_numpy(get_xminmax_from_pc0(pc0.cpu().numpy()))
+                                    self.x_minmax[first_res_idx:] = x_minmax_tmp
+                                    x_minmax_calculated = True
+                                all_pillar_counts = all_pillar_counts.cpu()
                         else:
                             if self.dense_conv_opt_on:
                                 self.x_minmax = self.mpc_script.get_minmax_inds(points[:, 1])
@@ -304,11 +342,13 @@ class MURAL(Detector3DTemplate):
                         num_points = points.size(0)
                         for i in range(first_res_idx, self.num_res):
                             pillar_counts = all_pillar_counts[i-first_res_idx].numpy() \
-                                    if self.backbone_3d is not None else None
+                                    if self.backbone_3d is not None and self.dettype != 'CenterPointVN' else None
                             pred_latency = self.calibrators[i].pred_exec_time_ms(num_points,
                                     pillar_counts,
                                     (self.x_minmax[i, 1] - self.x_minmax[i, 0] + 1).item(),
                                     consider_prep_time=self.simulate_exec_time)
+                            if self.dettype == 'CenterPointVN':
+                                pred_latency += bb3d_timings_per_res[i]
                             if self.simulate_exec_time:
                                 if pred_latency < batch_dict['deadline_sec'] * 1000:
                                     pred_res_idx = i
@@ -683,6 +723,16 @@ class MURAL(Detector3DTemplate):
         self.res_idx = cur_res_idx
 
         self.e2e_min_times_ms = torch.tensor([c.get_e2e_min_ms() for c in self.calibrators])
+
+        if self.calibrators[0].bb3d_exist:
+            self.bb3d_timing_data = np.stack([c.bb3d_timing_data for c in self.calibrators]).T
+            print('BB3D timing data collected for all resolutions.') # 512, num_res
+            print(self.bb3d_timing_data.shape)
+            # sort w.r.t first col (num_voxels)
+            self.bb3d_timing_data_sorted = []
+            for ri in range(self.num_res):
+                sorted_data = self.bb3d_timing_data[np.argsort(self.bb3d_timing_data[:,ri])]
+                self.bb3d_timing_data_sorted.append(sorted_data)
 
         if any(collect_calib_data):
             sys.exit()

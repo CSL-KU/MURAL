@@ -105,7 +105,7 @@ class MURALCalibrator():
                 self.vfe_time_reg_intercepts, self.num_points_normalizer)
 
         bb3d_time_pred = 0.
-        if self.bb3d_exist:
+        if self.bb3d_exist and pillar_counts is not None:
             if len(pillar_counts.shape) > 1:
                 pillar_counts = pillar_counts.sum(1)
             bb3d_time_pred = self.quadratic_time_pred(pillar_counts, self.bb3d_time_reg_coeffs,
@@ -227,10 +227,11 @@ class MURALCalibrator():
             plt.clf()
 
         if self.bb3d_exist and len(bb3d_times) > 0:
+            self.bb3d_timing_data = bb3d_times.sum(axis=1)
             # Fit bb3d data
             if self.treat_bb3d_as_single_l_group:
                 self.bb3d_time_reg_coeffs, self.bb3d_time_reg_intercepts = self.fit_data( \
-                        num_voxels[:, :1], bb3d_times.sum(axis=1), \
+                        num_voxels[:, :1], self.bb3d_timing_data, \
                         self.bb3d_num_l_groups, self.num_voxels_normalizer)
             else:
                 self.bb3d_time_reg_coeffs, self.bb3d_time_reg_intercepts = self.fit_data( \
