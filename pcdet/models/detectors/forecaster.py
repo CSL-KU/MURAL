@@ -283,57 +283,54 @@ class Forecaster(torch.nn.Module):
             self.buffer_poses.pop(0)
             self.buffer_ts.pop(0)
 
-        all_boxes_list : List[torch.Tensor] = []
-        all_labels_list : List[torch.Tensor] = []
-        all_scores_list : List[torch.Tensor] = []
+        pose = torch.stack(self.buffer_poses)
+        ts = torch.tensor(self.buffer_ts, dtype=torch.long)
 
-        for i in range(len(self.buffer_pred_dicts)):
-            pred_dict = self.buffer_pred_dicts[i]
-            pose = self.buffer_poses[i]
-            ts = self.buffer_ts[i]
-
-            boxes = pred_dict['pred_boxes']
-            if boxes.size(0) == 0:
-                continue
-
-            scores = pred_dict['pred_scores']
-            mask = (scores >= self.score_thresh)
-            boxes = boxes[mask]
-            labels = pred_dict['pred_labels'][mask] - 1
-
-            if self.score_thresh > 0:
-                scores = torch.full([boxes.size(0)], self.score_thresh * 0.9, dtype=scores.dtype)
-            else:
-                scores = scores[mask]
-
-            pose_idx = torch.zeros(boxes.size(0), dtype=torch.long)
-            forcb = torch.ops.kucsl.forecast_past_dets(
-                    boxes,
-                    pose_idx,
-                    pose.unsqueeze(0),
-                    cur_pose,
-                    torch.tensor([ts]).long(),
-                    cur_ts)
-
-            box_x, box_y = forcb[:,0], forcb[:,1]
-            range_mask = box_x >= self.pc_range[0]
-            range_mask = torch.logical_and(range_mask, box_x <= self.pc_range[3])
-            range_mask = torch.logical_and(range_mask, box_y >= self.pc_range[1])
-            mask = torch.logical_and(range_mask, box_y <= self.pc_range[4])
-
-            all_boxes_list.append(forcb[mask])
-            all_scores_list.append(scores[mask])
-            all_labels_list.append(labels[mask])
-
-        if len(all_boxes_list) == 0:
-            return [{'pred_boxes': torch.empty([0, 9], dtype=torch.float),
+        empty_boxes = [{'pred_boxes': torch.empty([0, 9], dtype=torch.float),
                 'pred_labels': torch.empty([0], dtype=torch.long),
                 'pred_scores': torch.empty([0], dtype=torch.float)}]
 
+        boxes = torch.cat((pd['pred_boxes'] for pd in self.buffer_pred_dicts), dim=0)
+        if boxes.size(0) == 0:
+            return empty_boxes
+
+        scores = torch.cat((pd['pred_scores'] for pd in self.buffer_pred_dicts), dim=0)
+        mask = (scores >= self.score_thresh)
+        boxes = boxes[mask]
+        labels = torch.cat((pd['pred_labels'] for pd in self.buffer_pred_dicts), dim=0)
+        labels = labels[mask] - 1
+
+        if self.score_thresh > 0:
+            scores = torch.full([boxes.size(0)], self.score_thresh * 0.9, dtype=scores.dtype)
+        else:
+            scores = scores[mask]
+
+        pose_idx = torch.cat([
+            torch.full((self.buffer_pred_dicts[i]['pred_boxes'].size(0),), i, dtype=torch.long)
+            for i in range(len(self.buffer_pred_dicts))
+        ], dim=0)[mask]
+
+        forcb = torch.ops.kucsl.forecast_past_dets(
+                boxes,
+                pose_idx,
+                pose,
+                cur_pose,
+                ts,
+                cur_ts)
+
+        box_x, box_y = forcb[:,0], forcb[:,1]
+        range_mask = box_x >= self.pc_range[0]
+        range_mask = torch.logical_and(range_mask, box_x <= self.pc_range[3])
+        range_mask = torch.logical_and(range_mask, box_y >= self.pc_range[1])
+        mask = torch.logical_and(range_mask, box_y <= self.pc_range[4])
+
         forc_dict : Dict[str,torch.Tensor] = {}
-        forc_dict['pred_boxes'] = torch.cat(all_boxes_list, dim=0)
-        forc_dict['pred_scores'] = torch.cat(all_scores_list, dim=0)
-        forc_dict['pred_labels'] = torch.cat(all_labels_list, dim=0)
+        forc_dict['pred_boxes'] = forcb[mask]
+        forc_dict['pred_scores'] = scores[mask]
+        forc_dict['pred_labels'] = labels[mask]
+
+        if forc_dict['pred_boxes'].size(0) == 0:
+            return empty_boxes
 
         if self.num_det_heads > 1:
             forecasted_dets = split_dets(
