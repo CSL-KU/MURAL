@@ -114,6 +114,8 @@ class CenterPointVALO(AnytimeTemplateV2):
         self.filter_pc_range =  self.vfe.point_cloud_range + \
                 torch.tensor([0.01, 0.01, 0.01, -0.01, -0.01, -0.01]).cuda()
         self.traced_vfe = None
+        if self.sched_bb3d:
+            self.scripted_vfe = torch.jit.script(self.vfe)
 
     def forward(self, batch_dict):
         with torch.cuda.stream(self.inf_stream):
@@ -132,15 +134,16 @@ class CenterPointVALO(AnytimeTemplateV2):
             self.measure_time_start('VFE')
             points = batch_dict['points']
             points_coords = batch_dict.get('points_coords', None)
-            if self.traced_vfe is None:
+            if (not self.sched_bb3d) and self.traced_vfe is None:
                 if points_coords is None:
                     self.traced_vfe = torch.jit.trace(self.vfe, points)
                 else:
                     self.traced_vfe = torch.jit.trace(self.vfe, (points, points_coords))
+            vfe = self.scripted_vfe if self.sched_bb3d else self.traced_vfe
             if points_coords is None:
-                vc, vf = self.traced_vfe(points)
+                vc, vf = vfe(points)
             else:
-                vc, vf = self.traced_vfe(points, points_coords)
+                vc, vf = vfe(points, points_coords)
             batch_dict['voxel_coords'], batch_dict['voxel_features'] = vc, vf
             batch_dict['pillar_coords'], batch_dict['pillar_features'] = vc, vf
             self.measure_time_end('VFE')

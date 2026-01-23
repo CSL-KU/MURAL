@@ -54,6 +54,7 @@ class CenterPointOpt(Detector3DTemplate):
             self.vfe, self.backbone_3d, self.map_to_bev, self.backbone_2d, \
                     self.dense_head = self.module_list
             self.map_to_bev_scrpt = self.map_to_bev # no need to script
+            self.vfe_scrpt = torch.jit.script(self.vfe)
 
         self.inf_stream = torch.cuda.Stream()
         self.opt_done = False
@@ -67,13 +68,14 @@ class CenterPointOpt(Detector3DTemplate):
     def forward(self, batch_dict):
         assert not self.training
         with torch.cuda.stream(self.inf_stream):
-            self.measure_time_start('VFE')
             batch_dict['points'] = common_utils.pc_range_filter(batch_dict['points'],
                                 self.filter_pc_range)
+            self.measure_time_start('VFE')
             points = batch_dict['points']
-            if self.traced_vfe is None:
+            if self.use_pillars and self.traced_vfe is None:
                 self.traced_vfe = torch.jit.trace(self.vfe, points)
-            batch_dict['voxel_coords'], batch_dict['voxel_features'] = self.traced_vfe(points)
+            batch_dict['voxel_coords'], batch_dict['voxel_features'] = self.traced_vfe(points) \
+                    if self.use_pillars else self.vfe_scrpt(points)
             batch_dict['pillar_features'] = batch_dict['voxel_features']
             batch_dict['pillar_coords'] = batch_dict['voxel_coords']
             self.measure_time_end('VFE')

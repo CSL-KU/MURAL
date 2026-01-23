@@ -26,6 +26,7 @@ class DynamicMeanVFE(VFETemplate):
     point_cloud_range : torch.Tensor
     voxel_params : List[Tuple[float, float, float, float, float, float, int, int, int, torch.Tensor, torch.Tensor, torch.Tensor]]
     num_point_features: int
+    points_mean_buf : torch.Tensor
 
     def __init__(self, model_cfg, num_point_features, voxel_size, grid_size, point_cloud_range, **kwargs):
         super().__init__(model_cfg=model_cfg)
@@ -54,6 +55,10 @@ class DynamicMeanVFE(VFETemplate):
                     torch.tensor(point_cloud_range).cuda()
             ))
         self.set_params(0)
+
+        num_max_out_inds = 300000
+        self.points_mean_buf = torch.zeros((num_max_out_inds, self.num_point_features),
+                device='cuda')
 
     @torch.jit.export
     def set_params(self, idx : int):
@@ -87,9 +92,9 @@ class DynamicMeanVFE(VFETemplate):
         
         unq_coords, unq_inv, unq_cnt = torch.unique(merge_coords, return_inverse=True, return_counts=True)
 
-        num_out_inds = int((torch.max(unq_inv) + 1).item())
-        points_mean = torch.zeros([num_out_inds, int(points_data.size(1))],
-                dtype=points_data.dtype, device=points_data.device)
+        num_out_inds = torch.max(unq_inv) + 1
+        points_mean = self.points_mean_buf[:num_out_inds]
+        points_mean.zero_()
         torch_scatter.scatter_mean(points_data, unq_inv, dim=0, out=points_mean)
 
         unq_coords = unq_coords.int()

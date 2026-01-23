@@ -40,7 +40,7 @@ class MURAL(Detector3DTemplate):
             return ("DS", "DCO")
         #13 is valo
         elif method_num == 14:
-            return ("WS", "DCO", "FRC")
+            return ("WS", "RE", "DCO", "FRC")
         elif method_num == 15:
             return ("DS", "RE", "DCO", "FRC")
         else:
@@ -88,7 +88,14 @@ class MURAL(Detector3DTemplate):
             area_max_l_mm = area_l_mm + 1500000
             min_grid_len = all_grid_lens[-1]
             all_pillar_sizes = all_pillar_sizes.tolist()
-            diffs = (32, 64, 96) if self.dettype == 'PointPillarsCP' else (128,)
+            if self.dettype == 'PointPillarsCP':
+                diffs = (32, 64, 96)
+            elif self.dettype == 'PillarNet':
+                diffs = (128,)
+            else: # CenterPointVN
+                diffs = (128,)
+                #diffs = (64, 96, 128)
+
             for diff in diffs:
                 opt = vsize_calc.calc_area_and_pillar_sz(min_grid_len-diff, area_min_l_mm,
                                                          area_max_l_mm)
@@ -237,7 +244,11 @@ class MURAL(Detector3DTemplate):
                     self.score_thresh, num_det_heads=self.dense_head.num_det_heads,
                     cls_id_to_det_head_idx_map=self.dense_head.cls_id_to_det_head_idx_map))
 
-        self.traced_vfe = [None] * self.num_res
+        self.use_scripted_vfe =  (self.dettype == 'CenterPointVN')
+        if self.use_scripted_vfe:
+            self.scripted_vfe = torch.jit.script(self.vfe)
+        else:
+            self.traced_vfe = [None] * self.num_res
 
     def forward(self, batch_dict):
         if self.training:
@@ -301,11 +312,6 @@ class MURAL(Detector3DTemplate):
                         if self.backbone_3d is not None:
                             if self.dettype == 'CenterPointVN':
                                 pc0, all_pillar_counts = None, None
-                                # old method, cumbersome for voxel
-                                # points_xyz = points[:, 1:4]
-                                # pc0, all_pillar_counts = self.mpc_script(points_xyz, first_res_idx)
-
-                                # new method
                                 # utilize the last resolution used and execution time of 3d backbone
                                 # self.res_idx is the last used res idx
                                 if not self.is_calibrating() and self._time_dict['Backbone3D']:
@@ -339,6 +345,7 @@ class MURAL(Detector3DTemplate):
                             if self.dense_conv_opt_on:
                                 self.x_minmax = self.mpc_script.get_minmax_inds(points[:, 1])
                                 x_minmax_calculated = True
+
                         num_points = points.size(0)
                         for i in range(first_res_idx, self.num_res):
                             pillar_counts = all_pillar_counts[i-first_res_idx].numpy() \
@@ -349,6 +356,7 @@ class MURAL(Detector3DTemplate):
                                     consider_prep_time=self.simulate_exec_time)
                             if self.dettype == 'CenterPointVN':
                                 pred_latency += bb3d_timings_per_res[i]
+                                self.calibrators[i].last_pred[2] = bb3d_timings_per_res[i]
                             if self.simulate_exec_time:
                                 if pred_latency < batch_dict['deadline_sec'] * 1000:
                                     pred_res_idx = i
@@ -431,15 +439,21 @@ class MURAL(Detector3DTemplate):
             if self.fused_convs_trt[self.res_idx] is None:
                 set_bn_resolution(self.res_aware_2d_batch_norms, self.res_idx)
 
-            if self.traced_vfe[self.res_idx] is None:
+            if (not self.use_scripted_vfe) and self.traced_vfe[self.res_idx] is None:
                 self.vfe.adjust_voxel_size_wrt_resolution(self.res_idx)
                 self.traced_vfe[self.res_idx] = torch.jit.trace(self.vfe, points)
 
             self.measure_time_end('Sched')
             self.measure_time_start('VFE')
             points = batch_dict['points']
-            batch_dict['pillar_coords'], batch_dict['pillar_features'] = \
-                    self.traced_vfe[self.res_idx](points)
+            if self.use_scripted_vfe:
+                self.scripted_vfe.adjust_voxel_size_wrt_resolution(self.res_idx)
+                batch_dict['pillar_coords'], batch_dict['pillar_features'] = \
+                        self.scripted_vfe(points)
+            else:
+                batch_dict['pillar_coords'], batch_dict['pillar_features'] = \
+                        self.traced_vfe[self.res_idx](points)
+
             batch_dict['voxel_coords'] = batch_dict['pillar_coords']
             batch_dict['voxel_features'] = batch_dict['pillar_features']
 
