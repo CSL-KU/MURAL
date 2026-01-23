@@ -285,9 +285,6 @@ class MURALCalibrator():
     def collect_data(self, fname="calib_data.json"):
         print('Calibration starting...')
         pc_range = self.model.filter_pc_range.cpu().numpy()
-        print('POINT CLOUD FILTER RANGE:', pc_range)
-        print('VOXEL_SIZE:', self.model.vfe.voxel_size)
-        print('GRID SIZE:', self.model.vfe.grid_size)
 
         num_samples = min(len(self.dataset), 512)
         print('Number of samples:', num_samples)
@@ -368,7 +365,6 @@ class MURALCalibrator():
             dense_ops_inp_sz = self.model.inp_tensor_sizes[self.res_idx]
             dummy_inp = torch.rand(dense_ops_inp_sz).cuda()
             max_width = dense_ops_inp_sz[3]
-            #print(sorted(list(dense_ops_ms_dict.keys())))
             slc_sz = self.dense_inp_slice_sz
             min_inp_width = slc_sz * 2
             for target_width in range(max_width, min_inp_width-1, -slc_sz):
