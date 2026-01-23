@@ -48,6 +48,7 @@ class Forecaster(torch.nn.Module):
     forecasting_coeff : Final[float]
     num_det_heads : Final[int]
     remove_considering_time : Final[bool]
+    buffer_size : Final[int]
 
     cls_id_to_det_head_idx_map : torch.Tensor
     num_dets_per_tile : torch.Tensor
@@ -55,13 +56,18 @@ class Forecaster(torch.nn.Module):
     past_ts : torch.Tensor
     past_detections : Dict[str,torch.Tensor]
 
+    buffer_pred_dicts : List[Dict[str,torch.Tensor]]
+    buffer_poses : List[torch.Tensor]
+    buffer_ts : List[int]
+
     def __init__(self,
             pc_range : Tuple[float],
             tcount : int,
             score_thresh : float,
             forecasting_coeff : float = 1.0,
             num_det_heads : int = 1,
-            cls_id_to_det_head_idx_map : torch.Tensor = torch.tensor([0])):
+            cls_id_to_det_head_idx_map : torch.Tensor = torch.tensor([0]),
+            buffer_size : int = 1):
         super().__init__()
 
         self.pc_range = pc_range
@@ -71,6 +77,12 @@ class Forecaster(torch.nn.Module):
         self.num_det_heads = num_det_heads
         self.cls_id_to_det_head_idx_map = cls_id_to_det_head_idx_map
         self.remove_considering_time = False
+        self.buffer_size = buffer_size
+
+        # Buffer lists to store last N detections
+        self.buffer_pred_dicts = []
+        self.buffer_poses = []
+        self.buffer_ts = []
 
         self.reset_vars()
 
@@ -262,45 +274,67 @@ class Forecaster(torch.nn.Module):
             cur_pose : torch.Tensor,
             cur_ts : int) -> List[Dict[str,torch.Tensor]]:
 
-        boxes = last_pred_dict['pred_boxes']
-        if boxes.size(0) == 0:
+        self.buffer_pred_dicts.append(last_pred_dict)
+        self.buffer_poses.append(last_pose)
+        self.buffer_ts.append(last_ts)
+
+        if len(self.buffer_pred_dicts) > self.buffer_size:
+            self.buffer_pred_dicts.pop(0)
+            self.buffer_poses.pop(0)
+            self.buffer_ts.pop(0)
+
+        all_boxes_list : List[torch.Tensor] = []
+        all_labels_list : List[torch.Tensor] = []
+        all_scores_list : List[torch.Tensor] = []
+
+        for i in range(len(self.buffer_pred_dicts)):
+            pred_dict = self.buffer_pred_dicts[i]
+            pose = self.buffer_poses[i]
+            ts = self.buffer_ts[i]
+
+            boxes = pred_dict['pred_boxes']
+            if boxes.size(0) == 0:
+                continue
+
+            scores = pred_dict['pred_scores']
+            mask = (scores >= self.score_thresh)
+            boxes = boxes[mask]
+            labels = pred_dict['pred_labels'][mask] - 1
+
+            if self.score_thresh > 0:
+                scores = torch.full([boxes.size(0)], self.score_thresh * 0.9, dtype=scores.dtype)
+            else:
+                scores = scores[mask]
+
+            pose_idx = torch.zeros(boxes.size(0), dtype=torch.long)
+            forcb = torch.ops.kucsl.forecast_past_dets(
+                    boxes,
+                    pose_idx,
+                    pose.unsqueeze(0),
+                    cur_pose,
+                    torch.tensor([ts]).long(),
+                    cur_ts)
+
+            box_x, box_y = forcb[:,0], forcb[:,1]
+            range_mask = box_x >= self.pc_range[0]
+            range_mask = torch.logical_and(range_mask, box_x <= self.pc_range[3])
+            range_mask = torch.logical_and(range_mask, box_y >= self.pc_range[1])
+            mask = torch.logical_and(range_mask, box_y <= self.pc_range[4])
+
+            all_boxes_list.append(forcb[mask])
+            all_scores_list.append(scores[mask])
+            all_labels_list.append(labels[mask])
+
+        if len(all_boxes_list) == 0:
             return [{'pred_boxes': torch.empty([0, 9], dtype=torch.float),
                 'pred_labels': torch.empty([0], dtype=torch.long),
                 'pred_scores': torch.empty([0], dtype=torch.float)}]
 
-        # mask
-        scores = last_pred_dict['pred_scores']
-        mask = (scores >= self.score_thresh)
-        boxes = boxes[mask]
-        labels = last_pred_dict['pred_labels'][mask] - 1
-
-        if self.score_thresh > 0:
-            scores = torch.full([boxes.size(0)], self.score_thresh * 0.9, dtype=scores.dtype)
-        else:
-            scores = scores[mask]
-
-        pose_idx = torch.zeros(boxes.size(0), dtype=torch.long)
-        forcb = torch.ops.kucsl.forecast_past_dets(
-                boxes,
-                pose_idx,
-                last_pose.unsqueeze(0),
-                cur_pose,
-                torch.tensor([last_ts]).long(),
-                cur_ts)
-
-        # remove those going out of range, which might not be necessary since eval doesn't care
-        box_x, box_y = forcb[:,0], forcb[:,1]
-        range_mask = box_x >= self.pc_range[0]
-        range_mask = torch.logical_and(range_mask, box_x <= self.pc_range[3])
-        range_mask = torch.logical_and(range_mask, box_y >= self.pc_range[1])
-        mask = torch.logical_and(range_mask, box_y <= self.pc_range[4])
-
         forc_dict : Dict[str,torch.Tensor] = {}
-        forc_dict['pred_boxes'] = forcb[mask]
-        forc_dict['pred_scores'] = scores[mask]
-        forc_dict['pred_labels'] = labels[mask]
+        forc_dict['pred_boxes'] = torch.cat(all_boxes_list, dim=0)
+        forc_dict['pred_scores'] = torch.cat(all_scores_list, dim=0)
+        forc_dict['pred_labels'] = torch.cat(all_labels_list, dim=0)
 
-        # This op can make nms faster
         if self.num_det_heads > 1:
             forecasted_dets = split_dets(
                     self.cls_id_to_det_head_idx_map,
@@ -308,7 +342,7 @@ class Forecaster(torch.nn.Module):
                     forc_dict['pred_boxes'],
                     forc_dict['pred_scores'],
                     forc_dict['pred_labels'],
-                    False) # moves results to gpu if true
+                    False)
         else:
             forecasted_dets = [forc_dict]
 

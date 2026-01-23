@@ -242,7 +242,8 @@ class MURAL(Detector3DTemplate):
             pc_range, tcount = tuple(all_pc_ranges[0]), 1
             self.forecaster = torch.jit.script(Forecaster(pc_range, tcount,
                     self.score_thresh, num_det_heads=self.dense_head.num_det_heads,
-                    cls_id_to_det_head_idx_map=self.dense_head.cls_id_to_det_head_idx_map))
+                    cls_id_to_det_head_idx_map=self.dense_head.cls_id_to_det_head_idx_map,
+                    buffer_size=2))
 
         self.use_scripted_vfe =  (self.dettype == 'CenterPointVN')
         if self.use_scripted_vfe:
