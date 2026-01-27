@@ -57,6 +57,7 @@ class MURALCalibrator():
         self.vfe_time_reg_intercepts = np.ones((1,), dtype=np.float32)
 
         self.bb3d_exist = ('BACKBONE_3D' in model.model_cfg)
+        self.maptobev_exits = ('MAP_TO_BEV' in model.model_cfg)
         self.num_voxels_normalizer = 100000.
         if self.bb3d_exist:
             self.treat_bb3d_as_single_l_group = False
@@ -76,8 +77,9 @@ class MURALCalibrator():
         self.num_slices = num_slices
         self.dense_ops_times_ms = np.zeros(num_slices).astype(float)
         self.postprocess_wcet_ms = .0
+        self.maptobev_wcet_ms = .0
         self.calib_data_dict = None
-        self.last_pred = np.zeros(5)
+        self.last_pred = np.zeros(6)
         self.e2e_wcet_ms = 999.0
         self.e2e_times_ms_arr = np.zeros(512)
 
@@ -113,11 +115,17 @@ class MURALCalibrator():
             if not self.treat_bb3d_as_single_l_group:
                 bb3d_time_pred = bb3d_time_pred.sum()
 
-        dense_ops_time_pred = self.dense_ops_times_ms[num_slices - 1]
+        dense_ops_time_pred, postprocess_wcet_ms = self.pred_post_bb3d_ms(num_slices)
 
-        self.last_pred = np.array([self.preprocess_wcet_ms, vfe_time_pred[0], bb3d_time_pred,
-                                   dense_ops_time_pred, self.postprocess_wcet_ms])
+        self.last_pred[:4] = np.array((self.preprocess_wcet_ms, vfe_time_pred[0], bb3d_time_pred,
+                                   self.maptobev_wcet_ms))
+
         return np.sum(self.last_pred if consider_prep_time else self.last_pred[1:]).item()
+
+    def pred_post_bb3d_ms(self,  num_slices: int) -> float:
+        self.last_pred[-2:] = np.array((self.dense_ops_times_ms[num_slices - 1],
+                                    self.postprocess_wcet_ms))
+        return self.last_pred[-2:]
 
     def find_config_to_meet_dl(self,
                             num_points : int,
@@ -140,7 +148,7 @@ class MURALCalibrator():
             bb3d_time_preds = np.flip(bb3d_time_preds)
 
         num_chosen_slices = slc_end_idx - slc_bgn_idx + 1
-        time_pred = vfe_time_pred[0] + self.postprocess_wcet_ms
+        time_pred = vfe_time_pred[0] + self.postprocess_wcet_ms + self.maptobev_wcet_ms
         bb3d_t = bb3d_time_preds[slc_bgn_idx if flip else slc_end_idx]
         dense_t = self.dense_ops_times_ms[num_chosen_slices-1]
         total_time_pred = time_pred + bb3d_t + dense_t
@@ -159,7 +167,7 @@ class MURALCalibrator():
 
         if total_time_pred < deadline_ms:
             self.last_pred = np.array([self.preprocess_wcet_ms, vfe_time_pred[0], bb3d_t,
-                                   dense_t, self.postprocess_wcet_ms])
+                                   self.maptobev_wcet_ms, dense_t, self.postprocess_wcet_ms])
 
         return (total_time_pred, slc_bgn_idx, slc_end_idx)
 
@@ -268,12 +276,8 @@ class MURALCalibrator():
             latency99perc = np.percentile(latency, 99)
             self.dense_ops_times_ms[int(sz)//self.dense_inp_slice_sz - 1] = latency99perc
 
-        self.postprocess_wcet_ms = np.percentile(self.calib_data_dict['postprocess_times_ms'], 50)
-        if False:
-            print('preprocess_wcet_ms', self.preprocess_wcet_ms)
-            print('dense_ops_times_ms')
-            print(self.dense_ops_times_ms)
-            print('postprocess_wcet_ms', self.postprocess_wcet_ms)
+        self.postprocess_wcet_ms = np.percentile(self.calib_data_dict['postprocess_times_ms'], 90)
+        self.maptobev_wcet_ms = np.percentile(self.calib_data_dict['maptobev_times_ms'], 90)
 
         if 'e2e_times_ms' in self.calib_data_dict:
             self.e2e_times_ms_arr = np.array(self.calib_data_dict['e2e_times_ms'])
@@ -298,8 +302,10 @@ class MURALCalibrator():
             num_voxels_arr = np.empty((num_samples, self.bb3d_num_l_groups), dtype=np.int32)
             bb3d_ms_arr = np.empty((num_samples, self.bb3d_num_l_groups), dtype=np.float32)
 
-        dense_ops_ms_dict = {}
+        if self.maptobev_exits:
+            maptobev_ms_arr = np.empty(num_samples, dtype=np.float32)
 
+        dense_ops_ms_dict = {}
         postprocess_ms_arr = np.empty(num_samples, dtype=np.float32)
         e2e_ms_arr = np.empty(num_samples, dtype=np.float32)
 
@@ -340,6 +346,9 @@ class MURALCalibrator():
                     nv = lbd['voxel_coords' if 'voxel_coords' in lbd else 'pillar_coords']
                     num_voxels_arr[sample_idx, 0] = nv.size(0)
                     bb3d_ms_arr[sample_idx, 0] = self.model._time_dict['Backbone3D'][-1]
+
+            if self.maptobev_exits:
+                maptobev_ms_arr[sample_idx] = float(self.model._time_dict['MapToBEV'][-1])
 
             dense_ops_ms = float(self.model._time_dict['DenseOps'][-1])
             x_min, x_max = lbd['tensor_slice_inds']
@@ -399,10 +408,13 @@ class MURALCalibrator():
                 "bb3d_times_ms": bb3d_ms_arr.tolist()
             })
 
+        if self.maptobev_exits:
+            self.calib_data_dict.update({
+                "maptobev_times_ms": maptobev_ms_arr.tolist(),
+            })
+
         with open(fname, "w") as outfile:
             json.dump(self.calib_data_dict, outfile, indent=4)
 
         # Read and parse calib data after dumping
         self.read_calib_data(fname)
-
-

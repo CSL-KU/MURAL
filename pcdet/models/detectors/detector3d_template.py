@@ -366,7 +366,7 @@ class Detector3DTemplate(nn.Module):
         self.ignore_dl_miss = (int(os.getenv('IGNORE_DL_MISS', 0)) == 1)
 
     def get_tpred_err(self, predicted_ms_arr):
-        err = np.empty(5)
+        err = np.empty(6)
 
         pp_ms = self._time_dict['PreProcess'][-1]
 
@@ -388,14 +388,20 @@ class Detector3DTemplate(nn.Module):
         else:
             err[2] = 0
 
+        if 'MapToBEV' in self._time_dict:
+            mtb_ms = self._time_dict['MapToBEV'][-1]
+            err[3] = predicted_ms_arr[3] - mtb_ms
+        else:
+            err[3] = 0
+
         dense_ops_ms = self._time_dict['DenseOps'][-1]
         sched2_ms = self._time_dict.get('Sched2', [0])[-1]
-        err[3] = predicted_ms_arr[3] - dense_ops_ms + sched2_ms
+        err[4] = predicted_ms_arr[4] - dense_ops_ms + sched2_ms
 
         genbox_ms =  self._time_dict['CenterHead-GenBox'][-1]
         postp_ms =  self._time_dict['PostProcess'][-1]
         postprocess_ms = postp_ms + genbox_ms
-        err[4] = predicted_ms_arr[4] - postprocess_ms
+        err[5] = predicted_ms_arr[5] - postprocess_ms
 
         return err
 
@@ -958,7 +964,7 @@ class Detector3DTemplate(nn.Module):
             print('Positive time prediction error indicate finishing earlier.')
             print('E2E execution time prediction error:')
             get_stats(e2e_diffs)
-            components = ['Preprocess', 'VFE', 'Backbone3D', 'DenseOps', 'Postprocess']
+            components = ['Preprocess', 'VFE', 'Backbone3D', 'MapToBEV', 'DenseOps', 'Postprocess']
             for i in range(tpred_diffs.shape[1]):
                 print(f'{components[i]} time prediction error:')
                 get_stats(tpred_diffs[:, i])
