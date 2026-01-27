@@ -25,24 +25,28 @@ class MURAL(Detector3DTemplate):
     def method_num_to_str_list(method_num):
         if method_num == 6:
             # dynamic scheduling, dense conv opt, res interpolation, forecasting
-            return ("DS", "RI", "DCO", "FRC")
+            return ("DS", "RI", "RE", "DCO", "FRC")
         elif method_num == 7:
-            return ("DS", "RI", "DCO")
+            return ("DS", "RI", "RE", "DCO")
         elif method_num == 8:
-            return ("DS", "RI")
+            return ("DS", "RI", "RE")
         elif method_num == 9:
             return ("DS",)
         elif method_num == 10:
             return ("WS",) # wcet scheduling
         elif method_num == 11:
-            return ("WS", "RI", "DCO", "FRC")
+            return ("WS", "RI", "RE", "DCO", "FRC")
         elif method_num == 12:
             return ("DS", "DCO")
         #13 is valo
         elif method_num == 14:
-            return ("WS", "RE", "DCO", "FRC")
-        elif method_num == 15:
-            return ("DS", "RE", "DCO", "FRC")
+            return ("WS", "DCO", "FRC", "TD")
+        elif method_num == 15: # MURAL-V, BEST FOR CENTERPOINTVN
+            return ("DS", "DCO", "FRC", "TD")
+        elif method_num == 16:
+            return ("DS", "DCO", "FRC", "TD", "RE")
+        elif method_num == 17:
+            return ("DS", "DCO", "FRC")
         else:
             return tuple()
 
@@ -81,7 +85,7 @@ class MURAL(Detector3DTemplate):
                 all_pillar_sizes = torch.cat((all_pillar_sizes, zt), dim=1)
 
         # method_str here has priority over model_cfg settings
-        if "RE" in self.method_str or model_cfg.get('EXTRAPOLATE_RES', True):
+        if "RE" in self.method_str:
             pc_range_l = pc_range.tolist()
             area_l_mm = int((pc_range_l[3] - pc_range_l[0]) * 1000000)
             area_min_l_mm = area_l_mm - 1500000
@@ -131,7 +135,7 @@ class MURAL(Detector3DTemplate):
         self.all_pc_ranges = torch.tensor(all_pc_ranges)
 
         self.interpolate_batch_norms = ("RI" in self.method_str)
-        self.extrapolate_batch_norms = ("RE" in self.method_str or model_cfg.get('EXTRAPOLATE_RES', True))
+        self.extrapolate_batch_norms = ("RE" in self.method_str)
         self.dense_conv_opt_on = ("DCO" in self.method_str)
         self.enable_forecasting_to_fut = ("FRC" in self.method_str) and self.ignore_dl_miss
         self.enable_forecasting = ("FRC" in self.method_str) and not self.ignore_dl_miss
@@ -251,6 +255,8 @@ class MURAL(Detector3DTemplate):
         else:
             self.traced_vfe = [None] * self.num_res
 
+        self.enable_tile_drop = ("TD" in self.method_str)
+
     def forward(self, batch_dict):
         if self.training:
             assert False # not supported
@@ -326,8 +332,9 @@ class MURAL(Detector3DTemplate):
                                     elif pos == len(tdata_last_res):
                                         closest_idx = len(tdata_last_res) - 1
                                     else:
-                                        closest_idx = pos - 1 if abs(tdata_last_res[pos-1] - last_bb3d_t) \
-                                                < abs(tdata_last_res[pos] - last_bb3d_t) else pos
+                                        closest_idx = pos
+                                        #pos - 1 if abs(tdata_last_res[pos-1] - last_bb3d_t) \
+                                        #        < abs(tdata_last_res[pos] - last_bb3d_t) else pos
 
                                     bb3d_timings_per_res = tdata[closest_idx, :]
                                 else:
@@ -457,6 +464,7 @@ class MURAL(Detector3DTemplate):
 
             batch_dict['voxel_coords'] = batch_dict['pillar_coords']
             batch_dict['voxel_features'] = batch_dict['pillar_features']
+            self.measure_time_end('VFE')
 
             if self.dettype == 'PointPillarsCP':
                 self.measure_time_start('MapToBEV')
@@ -465,7 +473,6 @@ class MURAL(Detector3DTemplate):
                         batch_dict['pillar_coords'],
                         batch_dict['batch_size'])
                 self.measure_time_end('MapToBEV')
-            self.measure_time_end('VFE')
 
             if self.backbone_3d is not None:
                 self.measure_time_start('Backbone3D')
@@ -483,6 +490,8 @@ class MURAL(Detector3DTemplate):
                 self.measure_time_start('MapToBEV')
                 batch_dict = self.map_to_bev(batch_dict)
                 conv_inp = batch_dict['spatial_features']
+                if self.enable_tile_drop:
+                    torch.cuda.synchronize()
                 self.measure_time_end('MapToBEV')
 
             if not self.optimization_done[self.res_idx]:
@@ -491,6 +500,28 @@ class MURAL(Detector3DTemplate):
             self.measure_time_start('DenseOps')
             forecasted_dets = self.do_forecast(batch_dict)
             if self.dense_conv_opt_on:
+                if self.enable_tile_drop:
+                    # - there could have been a misprediction of bb3d timing
+                    # to mitigate this, dropping tile can be necessary to meet the deadline
+                    # - first, check if we can meet the deadline with the current input sz
+                    time_left_ms = (batch_dict['abs_deadline_sec'] - time.time()) * 1000
+                    num_slices = xmax - xmin + 1
+                    time_needed_ms = sum(self.calibrators[self.res_idx].pred_post_bb3d_ms(num_slices))
+                    slices_to_drop = 0
+                    while time_needed_ms > time_left_ms and num_slices - 1 > slices_to_drop:
+                            slices_to_drop += 1
+                            time_needed_ms = sum(self.calibrators[self.res_idx].pred_post_bb3d_ms( \
+                                    num_slices-slices_to_drop))
+                    #we will drop slices_to_drop tiles equally from xmin and xmax
+                    # Calculate the new xmin and xmax after dropping tiles equally from both ends
+                    drop_left = slices_to_drop // 2
+                    drop_right = slices_to_drop - drop_left
+                    if not self.is_calibrating():
+                        xmin += drop_left
+                        xmax -= drop_right
+                        batch_dict['tensor_slice_inds'] = (xmin, xmax)
+                        # print('Tiles dropped:', drop_left, 'and', drop_right, 'from', num_slices)
+
                 lim1 = xmin*self.dense_inp_slice_sz
                 lim2 = (xmax+1)*self.dense_inp_slice_sz
                 conv_inp = conv_inp[..., lim1:lim2].contiguous()
