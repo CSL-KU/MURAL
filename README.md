@@ -1,6 +1,6 @@
 # MURAL: A Multi-Resolution Anytime Framework for LiDAR Object Detection Deep Neural Networks
 
-This is the code repository of MURAL, published in RTCSA 2025.
+This is the code repository of MURAL.
 
 ## 🚀 Quick Start
 
@@ -125,7 +125,7 @@ The existing deadline ranges in the do_run_tests.sh script are used for an RTX 3
   booktitle={IEEE International Conference on Embedded and Real-Time Computing Systems and Applications (RTCSA)}, 
   title={MURAL: A Multi-Resolution Anytime Framework for LiDAR Object Detection Deep Neural Networks},
   address={Singapore},
-  year={2026}
+  year={2025}
 }
 ```
 
