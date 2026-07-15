@@ -10,7 +10,7 @@ This is the code repository of MURAL.
 - Docker with NVIDIA container runtime support
 - NVIDIA GPU or iGPU (tested on Jetson Xavier, Jetson Orin, and RTX 3050)
 - nuScenes dataset, can be downloaded from [here](https://www.nuscenes.org/nuscenes).
-- Pre-trained model checkpoints, download from [here](https://kansas-my.sharepoint.com/:u:/g/personal/a249s197_home_ku_edu/Eb65ucMEk49Djv7jZTmXtcsBDNv3-ZPcUVF_1RQafdfhxQ?e=MGM9OK).
+- Pre-trained model checkpoints, download from [here](https://msuedutr-my.sharepoint.com/:u:/g/personal/ahmet_soyyigit_msu_edu_tr/IQBRG4-caQbIQ6HxwtHRa8hXAWpXreREMdX1Zv5Ru1Xov0c?e=fffsAw). In case the link is broken, contact ahmet.soyyigit93@gmail.com.
 
 ### Training the models yourself
 
